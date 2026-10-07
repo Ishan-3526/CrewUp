@@ -43,12 +43,12 @@ async function uploadFileApi(file) {
 }
 
 function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2500) }
-function setAuth(d){ token=d.token; me=d.user; localStorage.setItem('t',token); localStorage.setItem('u',JSON.stringify(me)); initSSE(); fetchUnread(); }
+function setAuth(d){ token=d.token; me=d.user; localStorage.setItem('t',token); localStorage.setItem('u',JSON.stringify(me)); initSSE(); fetchUnread(); api('/whoami').then(u=>{me.admin=u.admin;localStorage.setItem('u',JSON.stringify(me));nav()}).catch(()=>{}); }
 function logout(){ token=me=null; activeConvId=null; if(sseSource){sseSource.close();sseSource=null;} if(pollTimer){clearInterval(pollTimer);pollTimer=null;} localStorage.clear(); location.hash='#/'; nav(); }
 
 function nav(){
   $('nav').innerHTML = me
-    ? `<a href="#/">Browse</a><a href="#/new">Post a project</a><a href="#/chats" id="nav-chats" style="font-weight:700;color:var(--forest)">💬 Chat <span class="nav-badge ${unreadTotal>0?'':'hidden'}" id="chat-badge">${unreadTotal}</span></a><a href="#/me">${esc(me.name)}</a><a href="#" id="lo">Sign out</a>`
+    ? `<a href="#/">Browse</a><a href="#/new">Post a project</a><a href="#/chats" id="nav-chats" style="font-weight:700;color:var(--forest)">💬 Chat <span class="nav-badge ${unreadTotal>0?'':'hidden'}" id="chat-badge">${unreadTotal}</span></a>${me.admin?'<a href="#/admin" style="color:var(--bad)">Admin</a>':''}<a href="#/me">${esc(me.name)}</a><a href="#" id="lo">Sign out</a>`
     : `<a href="#/">Browse</a><a href="#/chats" style="font-weight:700">💬 Chat</a><a href="#/login">Sign in</a><a class="btn sm" href="#/register">Join</a>`;
   const lo=$('lo'); if(lo) lo.onclick=e=>{e.preventDefault();logout()}
 }
@@ -162,9 +162,25 @@ function authPage(mode){
     ${reg?'<label>Name</label><input name="name" required maxlength="60">':''}
     <label>Email</label><input name="email" type="email" required>
     <label>Password</label><input name="password" type="password" required minlength="8">
-    <div class="err" id="e"></div><button class="btn">${reg?'Join CrewUp':'Sign in'}</button></form></div>`;
+    <div class="err" id="e"></div><button class="btn">${reg?'Join CrewUp':'Sign in'}</button>${reg?'':'<p class="meta"><a href="#/forgot">Forgot your password?</a></p>'}</form></div>`;
   $('f').onsubmit = async e => { e.preventDefault();
     try { setAuth(await api(reg?'/register':'/login','POST',Object.fromEntries(new FormData(e.target)))); nav(); location.hash = '#/'; }
+    catch(x){ $('e').textContent = x.message } };
+}
+
+function forgotPage(){
+  app.innerHTML = `<div class="form"><h2>Reset your password</h2><form id="f"><label>Email</label><input name="email" type="email" required>
+    <div class="err" id="e"></div><button class="btn">Send reset link</button></form></div>`;
+  $('f').onsubmit = async e => { e.preventDefault();
+    try { await api('/forgot','POST',Object.fromEntries(new FormData(e.target)));
+      app.innerHTML = '<div class="form"><h2>Check your email</h2><p>If that address has an account, a reset link is on its way. It expires in 1 hour.</p><p class="meta">No email yet? Ask the site admin for a reset link.</p></div>' }
+    catch(x){ $('e').textContent = x.message } };
+}
+function resetPage(tk){
+  app.innerHTML = `<div class="form"><h2>Choose a new password</h2><form id="f"><label>New password</label><input name="password" type="password" required minlength="8">
+    <div class="err" id="e"></div><button class="btn">Update password</button></form></div>`;
+  $('f').onsubmit = async e => { e.preventDefault();
+    try { await api('/reset','POST',{token:tk, password:e.target.password.value}); toast('Password updated. Sign in.'); location.hash='#/login' }
     catch(x){ $('e').textContent = x.message } };
 }
 
@@ -237,7 +253,13 @@ async function project(id){
       <label>How should they reach you?</label><input name="contact" required maxlength="200" placeholder="Email, Discord, Instagram…">
       <div class="err" id="e"></div><button class="btn">Send application</button></form>`;
   }
+  if (me && !p.is_owner) html += `<div class="row" style="margin-top:28px"><button class="btn ghost sm" id="report">⚑ Report this project</button></div>`;
+  if (p.is_admin) html += `<div class="card" style="border-left-color:var(--bad);margin-top:20px"><h3>Admin tools</h3><div class="row"><button class="btn sm" id="adm-flag">${p.flagged?'Unflag (show publicly)':'Flag (hide from browse)'}</button><button class="btn ghost sm" id="adm-del">Delete project</button></div>${!p.is_owner ? (p.applications||[]).map(x=>`<div class="meta" style="margin-top:10px">${esc(x.name)}: ${esc(x.message.slice(0,80))} <button class="btn ghost sm" data-adm-app="${x.id}">Delete</button></div>`).join('') : ''}</div>`;
   app.innerHTML = html;
+  if ($('report')) $('report').onclick = async () => { const reason = prompt('Why are you reporting this?'); if (!reason) return; try { await api(`/projects/${id}/report`,'POST',{reason}); toast('Reported. Thanks.') } catch(x){ toast(x.message) } };
+  if ($('adm-flag')) $('adm-flag').onclick = async () => { await api(`/admin/projects/${id}/flag`,'POST',{flagged:!p.flagged}); toast('Updated'); project(id) };
+  if ($('adm-del')) $('adm-del').onclick = async () => { if(!confirm('Delete this project permanently?')) return; await api(`/admin/projects/${id}`,'DELETE'); toast('Deleted'); location.hash='#/admin' };
+  document.querySelectorAll('[data-adm-app]').forEach(b=>b.onclick=async()=>{ await api('/admin/applications/'+b.dataset.admApp,'DELETE'); toast('Deleted'); project(id) });
 
   if ($('btn-project-chat')) $('btn-project-chat').onclick = () => startProjectChat(p.id);
   if ($('btn-owner-chat')) $('btn-owner-chat').onclick = () => startDirectChat(p.owner_id, p.id);
@@ -876,6 +898,16 @@ async function startVoiceRecording(convId){
   }
 }
 
+async function adminPage(){
+  if(!me||!me.admin){ app.innerHTML='<p class="empty">Admins only.</p>'; return }
+  const d = await api('/admin/overview');
+  const row = p => `<div class="card"><h3><a href="#/p/${p.id}">${esc(p.title)}</a></h3><div class="meta">${esc(p.category)} · ${esc(p.owner_name)} · ${p.report_count} report(s)${p.flagged?' · FLAGGED':''}${p.status==='closed'?' · closed':''}</div>${p.reasons?`<p class="want">${esc(p.reasons)}</p>`:''}<div class="row"><button class="btn sm" data-fl="${p.id}" data-v="${p.flagged?0:1}">${p.flagged?'Unflag':'Flag'}</button><button class="btn ghost sm" data-del="${p.id}">Delete</button></div></div>`;
+  app.innerHTML = `<h2>Admin</h2><p class="meta">${d.stats.users} users · ${d.stats.projects} projects · ${d.stats.applications} applications</p><div class="card"><h3>Reset a user's password</h3><div class="bar"><input id="rl-email" type="email" placeholder="user@email.com"><button class="btn sm" id="rl-go">Get reset link</button></div><p class="meta" id="rl-out" style="word-break:break-all"></p></div><h3>Reported / flagged</h3>${d.reported.map(row).join('')||'<p class="empty">Nothing reported.</p>'}<h3 style="margin-top:32px">All projects</h3>${d.projects.map(row).join('')}`;
+  $('rl-go').onclick = async () => { try { const x = await api('/admin/reset-link','POST',{email:$('rl-email').value}); $('rl-out').textContent = 'Send this link to the user (valid 1 hour): ' + x.link } catch(e){ $('rl-out').textContent = e.message } };
+  document.querySelectorAll('[data-fl]').forEach(b=>b.onclick=async()=>{ await api(`/admin/projects/${b.dataset.fl}/flag`,'POST',{flagged:b.dataset.v==='1'}); adminPage() });
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{ if(confirm('Delete permanently?')){ await api('/admin/projects/'+b.dataset.del,'DELETE'); adminPage() } });
+}
+
 async function route(){
   nav(); const [, page, arg] = location.hash.split('/');
   try {
@@ -884,6 +916,9 @@ async function route(){
     else if (page==='new') newProject();
     else if (page==='p') await project(arg);
     else if (page==='me') await dash();
+    else if (page==='forgot') forgotPage();
+    else if (page==='reset') resetPage(arg);
+    else if (page==='admin') await adminPage();
     else if (page==='chats') await chatPage(arg);
     else await home();
   } catch(e){ app.innerHTML = `<p class="empty">${esc(e.message)}</p>` }
